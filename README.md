@@ -1,3 +1,8 @@
+用于个别用途
+
+
+
+
 # Pinterest Media Downloader (pinterest-dl)
 [![PyPI - Version](https://img.shields.io/pypi/v/pinterest-dl)](https://pypi.org/project/pinterest-dl/)
 [![PyPI - Python Version](https://img.shields.io/badge/python-%3E%3D3.10-blue

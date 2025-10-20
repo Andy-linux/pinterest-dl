@@ -163,6 +163,80 @@ class _ScraperWebdriver(_ScraperBase):
 
         return kept_imgs
 
+    def search(self, query: str, num: int) -> List[PinterestMedia]:
+        """Search pins from Pinterest using a WebDriver.
+
+        Args:
+            query (str): Pinterest query to search.
+            num (int): Maximum number of images to scrape.
+
+        Returns:
+            List[PinterestMedia]: List of scraped PinterestMedia objects.
+        """
+        try:
+            pin_scraper = PinterestDriver(self.webdriver)
+            return pin_scraper.search(
+                query, num=num, verbose=self.verbose, timeout=self.timeout, ensure_alt=self.ensure_alt
+            )
+        finally:
+            self.webdriver.close()
+
+    def search_and_download(
+        self,
+        query: str,
+        output_dir: Optional[Union[str, Path]],
+        num: int,
+        min_resolution: Optional[Tuple[int, int]] = None,
+        cache_path: Optional[Union[str, Path]] = None,
+        caption: Literal["txt", "json", "metadata", "none"] = "none",
+    ) -> Optional[List[PinterestMedia]]:
+        """Search pins from Pinterest and download images.
+
+        Args:
+            query (str): Pinterest query to search.
+            output_dir (Union[str, Path]): Directory to store downloaded images. 'None' print to console.
+            num (int): Maximum number of images to scrape.
+            min_resolution (Optional[Tuple[int, int]]): Minimum resolution for pruning.
+            cache_path (Optional[Union[str, Path]]): Path to cache scraped data as json
+            caption (Literal["txt", "json", "metadata", "none"]): Caption mode for downloaded images.
+                'txt' for alt text in separate files,
+                'json' for full image data,
+                'metadata' embeds in image files,
+                'none' skips captions
+        Returns:
+            Optional[List[PinterestMedia]]: List of downloaded PinterestMedia objects.
+        """
+        min_resolution = min_resolution or (0, 0)
+        scraped_imgs = self.search(query, num)
+
+        imgs_dict = [img.to_dict() for img in scraped_imgs]
+
+        if not output_dir:
+            # no output_dir provided, print the scraped image data to console
+            print("Scraped: ")
+            print(json.dumps(imgs_dict, indent=2))
+
+        if cache_path:
+            output_path = Path(cache_path)
+            io.write_json(imgs_dict, output_path, indent=4)
+            print(f"Scraped data cached to {output_path}")
+
+        if not output_dir:
+            return None
+
+        downloaded_imgs = self.download_media(scraped_imgs, output_dir, False)
+
+        kept_imgs = self.prune_images(downloaded_imgs, min_resolution or (0, 0), self.verbose)
+
+        if caption == "txt" or caption == "json":
+            self.add_captions_to_file(kept_imgs, output_dir, caption, self.verbose)
+        elif caption == "metadata":
+            self.add_captions_to_meta(kept_imgs, self.verbose)
+        elif caption != "none":
+            raise ValueError("Invalid caption mode. Use 'txt', 'json', 'metadata', or 'none'.")
+
+        return kept_imgs
+
     def login(self, email: str, password: str) -> PinterestDriver:
         """Login to Pinterest using the given credentials.
 

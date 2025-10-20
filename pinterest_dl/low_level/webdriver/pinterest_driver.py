@@ -58,27 +58,25 @@ class PinterestDriver:
         print("Cookies Captured")
         return cookies
 
-    def scrape(
+    def _scrape_page(
         self,
-        url: str,
         num: int = 20,
         timeout: float = 3,
         verbose: bool = False,
         ensure_alt: bool = False,
     ) -> List[PinterestMedia]:
-        unique_results = set()  # Use a set to store unique results
-        imgs_data: List[PinterestMedia] = []  # Store image data
+        unique_results = set()
+        imgs_data: List[PinterestMedia] = []
         previous_divs = []
         tries = 0
         pbar = tqdm(total=num, desc="Scraping")
         try:
-            self.webdriver.get(url)
             while len(unique_results) < num:
                 try:
                     divs = self.webdriver.find_elements(By.CSS_SELECTOR, "div[data-test-id='pin']")
                     if divs == previous_divs:
                         tries += 1
-                        time.sleep(1)  # delay 1 second
+                        time.sleep(1)
                     else:
                         tries = 0
                     if tries > timeout:
@@ -90,8 +88,8 @@ class PinterestDriver:
                             continue
                         images = div.find_elements(By.TAG_NAME, "img")
                         href = div.find_element(By.TAG_NAME, "a").get_attribute("href")
-                        id = div.get_attribute("data-test-pin-id")
-                        if not id:
+                        pin_id = div.get_attribute("data-test-pin-id")
+                        if not pin_id:
                             continue
                         for image in images:
                             alt = image.get_attribute("alt")
@@ -103,15 +101,12 @@ class PinterestDriver:
                                 if src not in unique_results:
                                     unique_results.add(src)
                                     img_data = PinterestMedia(
-                                        int(id),
+                                        int(pin_id),
                                         src,
                                         alt,
                                         href,
-                                        resolution=(
-                                            0,
-                                            0,
-                                        ),  # resolution is not available in this context
-                                    )  # TODO: support streams for webdriver
+                                        resolution=(0, 0),
+                                    )
                                     imgs_data.append(img_data)
                                     pbar.update(1)
                                     if verbose:
@@ -119,12 +114,11 @@ class PinterestDriver:
                                     if len(unique_results) >= num:
                                         break
 
-                    previous_divs = copy.copy(divs)  # copy to avoid reference
+                    previous_divs = copy.copy(divs)
 
-                    # Scroll down
                     dummy = self.webdriver.find_element(By.TAG_NAME, "a")
                     dummy.send_keys(Keys.PAGE_DOWN)
-                    self.randdelay(1, 2)  # delay between 1 and 2 seconds
+                    self.randdelay(1, 2)
 
                 except StaleElementReferenceException:
                     if verbose:
@@ -137,6 +131,29 @@ class PinterestDriver:
             if verbose:
                 print(f"Scraped {len(imgs_data)} images")
             return imgs_data
+
+    def scrape(
+        self,
+        url: str,
+        num: int = 20,
+        timeout: float = 3,
+        verbose: bool = False,
+        ensure_alt: bool = False,
+    ) -> List[PinterestMedia]:
+        self.webdriver.get(url)
+        return self._scrape_page(num, timeout, verbose, ensure_alt)
+
+    def search(
+        self,
+        query: str,
+        num: int = 20,
+        timeout: float = 3,
+        verbose: bool = False,
+        ensure_alt: bool = False,
+    ) -> List[PinterestMedia]:
+        url = f"https://www.pinterest.com/search/pins/?q={query}"
+        self.webdriver.get(url)
+        return self._scrape_page(num, timeout, verbose, ensure_alt)
 
     def _is_div_ad(self, div: WebElement) -> bool:
         """Check if div is an ad.

@@ -1,3 +1,4 @@
+import random
 import re
 from typing import List, Optional, Tuple
 
@@ -15,23 +16,26 @@ from pinterest_dl.low_level.http.request_builder import RequestBuilder
 
 
 class PinterestAPI:
-    USER_AGENT = (
-        "Mozilla/5.0 (Windows NT 6.1; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36"
-    )
+    USER_AGENTS = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.3 Safari/605.1.15",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+    ]
 
     def __init__(
         self,
         url: str,
         cookies: Optional[PinterestCookieJar] = None,
-        timeout: float = 5,
+        timeout: Tuple[float, float] = (5.0, 15.0),
     ) -> None:
         """Pinterest API client.
 
         Args:
             url (str): Pinterest URL. (e.g. "https://www.pinterest.com/pin/123456789/")
             cookies (Optional[PinterestCookieJar], optional): Pinterest cookies. Defaults to None.
-            timeout (float, optional): Request timeout in seconds. Defaults to 5.
+            timeout (Tuple[float, float], optional): Request (connect, read) timeout in seconds. Defaults to (5.0, 15.0).
         """
         self.url = url
         self.timeout = timeout
@@ -56,11 +60,14 @@ class PinterestAPI:
         # Initialize session
         self._session = requests.Session()
         self._session.cookies.update(self.cookies)  # Update session cookies
-        self._session.headers.update({"User-Agent": self.USER_AGENT})
         self._session.headers.update(
             {"x-pinterest-pws-handler": "www/pin/[id].js"}
         )  # required since 2025-03-07. See https://github.com/sean1832/pinterest-dl/issues/30
         self.is_pin = bool(self.pin_id)
+
+    def _update_session_headers(self):
+        """Set a random User-Agent for the session."""
+        self._session.headers.update({"User-Agent": random.choice(self.USER_AGENTS)})
 
     def get_related_images(self, num: int, bookmark: List[str]) -> PinResponse:
         if not self.pin_id:
@@ -85,6 +92,7 @@ class PinterestAPI:
         }
         try:
             request_url = RequestBuilder.build_get(endpoint, options, source_url)
+            self._update_session_headers()
             response_raw = self._session.get(request_url, timeout=self.timeout)
         except requests.exceptions.RequestException as e:
             raise requests.RequestException(f"Failed to request related images: {e}")
@@ -114,6 +122,7 @@ class PinterestAPI:
 
         try:
             request_url = RequestBuilder.build_get(endpoint, options, source_url)
+            self._update_session_headers()
             response_raw = self._session.get(request_url, timeout=self.timeout)
         except requests.exceptions.RequestException as e:
             raise requests.RequestException(f"Failed to request main image: {e}")
@@ -137,6 +146,7 @@ class PinterestAPI:
 
         try:
             request_url = RequestBuilder.build_get(endpoint, options, source_url)
+            self._update_session_headers()
             response_raw = self._session.get(request_url, timeout=self.timeout)
         except requests.exceptions.RequestException as e:
             raise requests.RequestException(f"Failed to request board: {e}")
@@ -165,6 +175,7 @@ class PinterestAPI:
 
         try:
             request_url = RequestBuilder.build_get(endpoint, options, source_url)
+            self._update_session_headers()
             response_raw = self._session.get(request_url, timeout=self.timeout)
         except requests.exceptions.RequestException as e:
             raise requests.RequestException(f"Failed to request board feed: {e}")
@@ -193,6 +204,7 @@ class PinterestAPI:
 
         try:
             request_url = RequestBuilder.build_get(endpoint, options, source_url)
+            self._update_session_headers()
             response_raw = self._session.get(request_url, timeout=self.timeout)
         except requests.exceptions.RequestException as e:
             raise requests.RequestException(f"Failed to request search: {e}")

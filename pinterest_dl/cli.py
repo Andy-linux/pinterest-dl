@@ -95,7 +95,7 @@ def get_parser() -> argparse.ArgumentParser:
     search_cmd.add_argument("-r", "--resolution", type=str, help="Minimum resolution to keep (e.g. 512x512).")
     search_cmd.add_argument("--video", action="store_true", help="Download video streams if available")
     search_cmd.add_argument("--timeout", type=int, default=10, help="Timeout in seconds for requests (default: 10)")
-    search_cmd.add_argument("--delay", type=float, default=0.2, help="Delay between requests in seconds (default: 0.2)")
+    search_cmd.add_argument("--delay-range", type=float, nargs=2, default=[0.8, 2.5], help="Random delay range between requests in seconds (default: 0.8 2.5)")
     search_cmd.add_argument("--cache", type=str, help="path to cache URLs into json file for reuse")
     search_cmd.add_argument("--verbose", action="store_true", help="Print verbose output")
     search_cmd.add_argument("--caption", type=str, default="none", choices=["txt", "json", "metadata", "none"], help="Caption format for downloaded images: 'txt' for alt text in separate files, 'json' for full image data in seperate file, 'metadata' embeds in image files, 'none' skips captions (default)")
@@ -223,9 +223,36 @@ def main() -> None:
             for query in querys:
                 print(f"Searching {query}...")
                 if args.client in ["chrome", "firefox"]:
-                    raise NotImplementedError(
-                        "Search is currently not available for browser clients."
+                    if args.video:
+                        print("Warning: Video download is not supported for browser clients.")
+                    if args.delay_range != [0.8, 2.5]:
+                        print("Warning: delay-range is not supported for browser clients.")
+                    if args.cap_from_title:
+                        print("Warning: cap-from-title is not supported for browser clients.")
+
+                    imgs = (
+                        PinterestDL.with_browser(
+                            browser_type=args.client,
+                            timeout=args.timeout,
+                            headless=not args.headful,
+                            incognito=args.incognito,
+                            verbose=args.verbose,
+                            ensure_alt=args.ensure_cap,
+                        )
+                        .with_cookies_path(args.cookies)
+                        .search_and_download(
+                            query,
+                            args.output,
+                            args.num,
+                            min_resolution=parse_resolution(args.resolution)
+                            if args.resolution
+                            else None,
+                            cache_path=args.cache,
+                            caption=args.caption,
+                        )
                     )
+                    if imgs and len(imgs) != args.num:
+                        print(f"Warning: Only ({len(imgs)}) images were scraped from {query}.")
                 else:
                     if args.incognito or args.headful:
                         print(
@@ -247,7 +274,7 @@ def main() -> None:
                             else (0, 0),
                             cache_path=args.cache,
                             caption=args.caption,
-                            delay=args.delay,
+                            delay_range=args.delay_range,
                             caption_from_title=args.cap_from_title,
                         )
                     )

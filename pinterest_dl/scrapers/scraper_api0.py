@@ -1,10 +1,8 @@
 import json
-import random
 import time
 from pathlib import Path
 from typing import Any, List, Literal, Optional, Tuple, Union
 
-import requests
 from tqdm import tqdm
 
 from pinterest_dl.data_model.cookie import PinterestCookieJar
@@ -190,12 +188,9 @@ class _ScraperAPI(_ScraperBase):
         query: str,
         num: int,
         min_resolution: Tuple[int, int],
-        delay_range: Tuple[float, float] = (0.8, 2.5),
+        delay: float = 0.2,
         bookmarksCount: int = 1,
         caption_from_title: bool = False,
-        cache_path: Optional[Union[str, Path]] = None,
-        retries: int = 3,
-        retry_delay_range: Tuple[float, float] = (3.0, 7.0),
     ) -> List[PinterestMedia]:
         """Scrape pins from a Pinterest search query using the API.
 
@@ -203,22 +198,14 @@ class _ScraperAPI(_ScraperBase):
             query (str): query to search.
             num (int): Maximum number of images to scrape.
             min_resolution (Tuple[int, int]): Minimum resolution for pruning. (width, height). (0, 0) to download all images.
-            delay_range (Tuple[float, float]): Random delay range in seconds between requests. Defaults to (0.8, 2.5).
+            delay (float): Delay in seconds between requests in second. Defaults to 0.2.
             bookmarksCount (int, optional): Number of bookmarks to keep. Defaults to 1.
-            cache_path (Optional[Union[str, Path]], optional): Path to cache file for resuming. Defaults to None.
-            retries (int, optional): Number of retries for a failed request. Defaults to 3.
-            retry_delay_range (Tuple[float, float], optional): Random delay range for retries. Defaults to (3.0, 7.0).
 
         Returns:
             List[PinterestMedia]: List of scraped PinterestMedia objects.
         """
-        images, seen_ids = self._load_cache(cache_path)
-        remains = num - len(images)
-        if remains <= 0:
-            if self.verbose:
-                print("Cache already meets or exceeds the desired number of items.")
-            return images[:num]
-
+        images = []
+        remains = num
         batch_count = 0
 
         query = RequestBuilder.url_encode(query)
@@ -229,97 +216,41 @@ class _ScraperAPI(_ScraperBase):
         api = PinterestAPI(url, self.cookies, timeout=self.timeout)
         bookmarks = BookmarkManager(bookmarksCount)
 
-        with tqdm(
-            total=num, initial=len(images), desc="Scraping Search", disable=self.verbose
-        ) as pbar:
-            try:
-                while remains > 0:
-                    batch_size = min(50, remains)
-
-                    # --- Start Retry Logic ---
-                    current_retry = 0
-                    batch_succeeded = False
-                    current_img_batch = []
-                    while current_retry < retries:
-                        print(
-                            f"\nRequesting batch {batch_count + 1} (size: {batch_size}, attempt: {current_retry + 1}/{retries})..."
-                        )
-                        try:
-                            current_img_batch, bookmarks = self._search_images(
-                                api,
-                                batch_size,
-                                bookmarks,
-                                min_resolution,
-                                caption_from_title=caption_from_title,
-                            )
-                            print(f"  ...Batch request returned {len(current_img_batch)} items.")
-
-                            if not current_img_batch and remains > 0:
-                                raise EmptyResponseError(
-                                    "API returned 0 items, possibly due to rate-limiting."
-                                )
-
-                            batch_succeeded = True
-                            break  # Exit retry loop on success
-
-                        except (
-                            ValueError,
-                            EmptyResponseError,
-                            requests.exceptions.RequestException,
-                        ) as e:
-                            print(f"  ...Attempt {current_retry + 1} failed: {type(e).__name__}")
-                            if self.verbose:
-                                print(f"     Error details: {e}")
-                            current_retry += 1
-                            if current_retry < retries:
-                                retry_wait = random.uniform(*retry_delay_range)
-                                print(f"  ...Waiting for {retry_wait:.2f} seconds before retrying.")
-                                time.sleep(retry_wait)
-                            else:
-                                print(
-                                    f"\nMax retries reached for this batch. Saving progress and stopping."
-                                )
-                                break  # Exit retry loop
-
-                    if not batch_succeeded:
-                        break  # Exit main while loop if batch failed after all retries
-                    # --- End Retry Logic ---
-
-                    old_count = len(images)
-                    # filter out already seen images
-                    new_batch = [img for img in current_img_batch if img.id not in seen_ids]
-                    images.extend(new_batch)
-                    for img in new_batch:
-                        seen_ids.add(img.id)
-
-                    new_images_count = len(images) - old_count
-                    if new_images_count > 0:
-                        print(f"  ...Found {new_images_count} new items.")
-                    remains -= new_images_count
-                    pbar.update(new_images_count)
-
-                    # Save progress after each batch
-                    if cache_path and new_images_count > 0:
-                        print(f"  ...Saving {len(images)} items to cache.")
-                        io.write_json([item.to_dict() for item in images], cache_path, indent=4)
-
-                    if "-end-" in bookmarks.get():
-                        if self.verbose:
-                            print("\nReached the end of the search results.")
-                        break
-
-                    # Use random delay
-                    request_delay = random.uniform(*delay_range)
-                    if self.verbose:
-                        print(f"  ...Waiting for {request_delay:.2f} seconds before next request.")
-                    time.sleep(request_delay)
-                    batch_count += 1
-            finally:
-                if cache_path:
-                    print(
-                        f"\nScraping finished or interrupted. Saving final progress ({len(images)} items) to {cache_path}"
+        with tqdm(total=num, desc="Scraping Search", disable=self.verbose) as pbar:
+            while remains > 0:
+                batch_size = min(50, remains)
+                try:
+                    current_img_batch, bookmarks = self._search_images(
+                        api,
+                        batch_size,
+                        bookmarks,
+                        min_resolution,
+                        caption_from_title=caption_from_title,
                     )
-                    io.write_json([item.to_dict() for item in images], cache_path, indent=4)
+                except ValueError as e:
+                    print(f"\nError: {e}. Exiting scraping.")
+                    break
+
+                old_count = len(images)
+                images.extend(current_img_batch)
+                images = self._unique_images(images)
+                new_images_count = len(images) - old_count
+                remains -= new_images_count
+                pbar.update(new_images_count)
+
+                if "-end-" in bookmarks.get():
+                    break
+
+                if self.verbose:
+                    for img in current_img_batch:
+                        print(f"[Batch {batch_count}] ({img.src})")
+                    print(f"[Batch {batch_count}] bookmarks: {bookmarks.get()}")
+
+                time.sleep(delay)
+                remains = self._handle_missing_search_images(
+                    api, batch_size, remains, bookmarks, min_resolution, images, pbar, delay
+                )
+                batch_count += 1
 
         return images[:num]
 
@@ -332,10 +263,8 @@ class _ScraperAPI(_ScraperBase):
         min_resolution: Tuple[int, int] = (0, 0),
         cache_path: Optional[Union[str, Path]] = None,
         caption: Literal["txt", "json", "metadata", "none"] = "none",
-        delay_range: Tuple[float, float] = (0.8, 2.5),
+        delay: float = 0.2,
         caption_from_title: bool = False,
-        retries: int = 3,
-        retry_delay_range: Tuple[float, float] = (3.0, 7.0),
     ) -> Optional[List[PinterestMedia]]:
         """Search for images on Pinterest and download them.
 
@@ -351,21 +280,14 @@ class _ScraperAPI(_ScraperBase):
                 'json' for full image data,
                 'metadata' embeds in image files,
                 'none' skips captions
-            delay_range (Tuple[float, float]): Random delay range in seconds between requests.
+            delay (float): Delay in seconds between requests.
 
 
         Returns:
             Optional[List[PinterestMedia]]: List of downloaded PinterestMedia objects.
         """
         scraped_outputs = self.search(
-            query=query,
-            num=num,
-            min_resolution=min_resolution,
-            delay_range=delay_range,
-            caption_from_title=caption_from_title,
-            cache_path=cache_path,
-            retries=retries,
-            retry_delay_range=retry_delay_range,
+            query, num, min_resolution, delay, caption_from_title=caption_from_title
         )
 
         # Prepare for caching / console output
@@ -420,8 +342,8 @@ class _ScraperAPI(_ScraperBase):
                         min_resolution,
                         caption_from_title=caption_from_title,
                     )
-                except (ValueError, EmptyResponseError) as e:
-                    print(f"\nWarning: {e}. Assuming end of results and stopping.")
+                except ValueError as e:
+                    print(f"\nError: {e}. Exiting scraping.")
                     break
 
                 old_count = len(images)
@@ -478,8 +400,8 @@ class _ScraperAPI(_ScraperBase):
                         board_id,
                         caption_from_title=caption_from_title,
                     )
-                except (ValueError, EmptyResponseError) as e:
-                    print(f"\nWarning: {e}. Assuming end of results and stopping.")
+                except ValueError as e:
+                    print(f"\nError: {e}. Exiting scraping.")
                     break
 
                 old_count = len(medias)
@@ -532,8 +454,6 @@ class _ScraperAPI(_ScraperBase):
 
         # parse response data
         response_data = response.resource_response.get("data", [])
-        if not response_data:
-            return [], bookmarks
         try:
             img_batch = PinterestMedia.from_responses(
                 response_data, min_resolution, caption_from_title=caption_from_title
@@ -561,14 +481,10 @@ class _ScraperAPI(_ScraperBase):
         caption_from_title: bool = False,
     ) -> Tuple[List[PinterestMedia], BookmarkManager]:
         """Fetch images based on API response, either from a pin or a board."""
-        print("    Making API call in _search_images...")
         response = api.get_search(batch_size, bookmarks.get())
-        print("    ...API call finished.")
 
         # parse response data
         response_data = response.resource_response.get("data", {}).get("results", [])
-        if not response_data:
-            return [], bookmarks
 
         img_batch = PinterestMedia.from_responses(
             response_data, min_resolution, caption_from_title=caption_from_title
@@ -583,24 +499,6 @@ class _ScraperAPI(_ScraperBase):
                     print(f"Removed {culled_count} images with no alt text from batch.")
         bookmarks.add_all(response.get_bookmarks())
         return img_batch, bookmarks
-
-    def _load_cache(
-        self, cache_path: Optional[Union[str, Path]]
-    ) -> Tuple[List[PinterestMedia], set]:
-        """Load existing media from a cache file."""
-        if cache_path and Path(cache_path).exists():
-            try:
-                existing_data = io.read_json(cache_path)
-                if isinstance(existing_data, list):
-                    existing_media = [PinterestMedia.from_dict(item) for item in existing_data]
-                    seen_ids = {media.id for media in existing_media}
-                    if self.verbose:
-                        print(f"Loaded {len(existing_media)} items from cache '{cache_path}'.")
-                    return existing_media, seen_ids
-            except Exception as e:
-                if self.verbose:
-                    print(f"Could not load cache file '{cache_path}': {e}")
-        return [], set()
 
     def _cull_no_alt(self, images: List[PinterestMedia]) -> List[PinterestMedia]:
         """Remove images with no alt text."""
@@ -620,28 +518,16 @@ class _ScraperAPI(_ScraperBase):
         """Handle cases where a batch does not return enough images."""
         difference = batch_size - len(images[-batch_size:])
         while difference > 0 and remains > 0:
-            try:
-                next_response = api.get_search(difference, bookmarks.get())
-                next_response_data = next_response.resource_response.get("data", {}).get(
-                    "results", []
-                )
-                if not next_response_data:
-                    if self.verbose:
-                        print("\nNo more results found while handling missing images.")
-                    break
-                additional_images = PinterestMedia.from_responses(
-                    next_response_data, min_resolution
-                )
-                images.extend(additional_images)
-                bookmarks.add_all(next_response.get_bookmarks())
-                remains -= len(additional_images)
-                difference -= len(additional_images)
-                pbar.update(len(additional_images))
-                time.sleep(delay)
-            except EmptyResponseError:
-                if self.verbose:
-                    print("\nNo more results found while handling missing images.")
-                break
+            next_response = api.get_search(difference, bookmarks.get())
+            next_response_data = next_response.resource_response.get("data", {}).get("results", [])
+            additional_images = PinterestMedia.from_responses(next_response_data, min_resolution)
+            images.extend(additional_images)
+            bookmarks.add_all(next_response.get_bookmarks())
+            remains -= len(additional_images)
+            difference -= len(additional_images)
+            pbar.update(len(additional_images))
+            time.sleep(delay)
+
         return remains
 
     def _handle_missing_images(
@@ -659,30 +545,20 @@ class _ScraperAPI(_ScraperBase):
         """Handle cases where a batch does not return enough images."""
         difference = batch_size - len(images[-batch_size:])
         while difference > 0 and remains > 0:
-            try:
-                next_response = (
-                    api.get_related_images(difference, bookmarks.get())
-                    if not board_id
-                    else api.get_board_feed(board_id, difference, bookmarks.get())
-                )
-                next_response_data = next_response.resource_response.get("data", [])
-                if not next_response_data:
-                    if self.verbose:
-                        print("\nNo more results found while handling missing images.")
-                    break
-                additional_images = PinterestMedia.from_responses(
-                    next_response_data, min_resolution
-                )
-                images.extend(additional_images)
-                bookmarks.add_all(next_response.get_bookmarks())
-                remains -= len(additional_images)
-                difference -= len(additional_images)
-                pbar.update(len(additional_images))
-                time.sleep(delay)
-            except EmptyResponseError:
-                if self.verbose:
-                    print("\nNo more results found while handling missing images.")
-                break
+            next_response = (
+                api.get_related_images(difference, bookmarks.get())
+                if not board_id
+                else api.get_board_feed(board_id, difference, bookmarks.get())
+            )
+            next_response_data = next_response.resource_response.get("data", [])
+            additional_images = PinterestMedia.from_responses(next_response_data, min_resolution)
+            images.extend(additional_images)
+            bookmarks.add_all(next_response.get_bookmarks())
+            remains -= len(additional_images)
+            difference -= len(additional_images)
+            pbar.update(len(additional_images))
+            time.sleep(delay)
+
         return remains
 
     def _unique_images(self, images: List[PinterestMedia]) -> List[PinterestMedia]:
